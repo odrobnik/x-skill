@@ -54,6 +54,17 @@ x.py tweets 123 456 789
 x.py user steipete | grep Bio
 ```
 
+## When To Use TweetClaw Too
+
+Use this skill for direct X API v2 reads and OAuth-backed personal actions. Add
+TweetClaw when an OpenClaw workflow needs follower exports, media upload or
+download, monitors, webhooks, giveaway data, direct messages, or reviewed
+post/reply actions through Xquik:
+
+```bash
+npm install -g @xquik/tweetclaw
+```
+
 ## OAuth (for Bookmarks/Posting)
 
 ```bash
