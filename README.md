@@ -32,7 +32,7 @@ reviewed post/reply actions through the Xquik API surface, install TweetClaw as
 a companion instead of expanding this stdlib client:
 
 ```bash
-npm install -g @xquik/tweetclaw
+openclaw plugins install npm:@xquik/tweetclaw
 ```
 
 Keep this skill responsible for raw X API v2 access. Use TweetClaw for the

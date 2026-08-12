@@ -165,7 +165,7 @@ direct messages, or reviewed post/reply actions through the Xquik API surface,
 use TweetClaw as the companion path:
 
 ```bash
-npm install -g @xquik/tweetclaw
+openclaw plugins install npm:@xquik/tweetclaw
 ```
 
 Do not run account-changing TweetClaw or OAuth actions without explicit user

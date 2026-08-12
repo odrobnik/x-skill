@@ -62,7 +62,7 @@ download, monitors, webhooks, giveaway data, direct messages, or reviewed
 post/reply actions through Xquik:
 
 ```bash
-npm install -g @xquik/tweetclaw
+openclaw plugins install npm:@xquik/tweetclaw
 ```
 
 ## OAuth (for Bookmarks/Posting)
