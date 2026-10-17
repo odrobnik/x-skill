@@ -1,3 +1,10 @@
+.DS_Store
 __pycache__/
 *.pyc
-.DS_Store
+# Credentials belong in ~/.openclaw/x/, never in the repository
+config.json
+tokens.json
+pending-auth.json
+credentials.json
+oauth2.json
+.env
