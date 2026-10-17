@@ -86,7 +86,7 @@ Add `--json` before or after the subcommand (`x.py --json user NAME` = `x.py use
 
 - **stdout carries exactly one JSON document**, also for errors. Human-readable text, emoji and warnings go to stderr (discard with `2>/dev/null`).
 - Pretty-printed (indent 2) when stdout is a terminal, compact one-line JSON when piped. UTF-8, not ASCII-escaped. Posts and users are passed through as X sends them, plus a `url`.
-- **Errors:** `{"error": {"message": "...", "code": "..."}}` on stdout, non-zero exit (1 = failure, 2 = usage, including bad option values). `code` is X's error type (e.g. `usage-capped`, `resource-not-found`, `invalid_request`, `rate_limited`), or `not_signed_in`, `missing_credentials`, `missing_oauth_client`, `invalid_tweet`, `invalid_username`, `not_found`, `network_error`, `filesystem_error`, `usage`; `error` for anything else.
+- **Errors:** `{"error": {"message": "...", "code": "..."}}` on stdout, non-zero exit (1 = failure, 2 = usage, including bad option values). `code` is X's error type (e.g. `usage-capped`, `resource-not-found`, `invalid_request`, `rate_limited`), or `not_signed_in`, `missing_credentials`, `missing_oauth_client`, `unknown_account`, `invalid_tweet`, `invalid_username`, `not_found`, `network_error`, `filesystem_error`, `usage`; `error` for anything else.
 
 | Command | JSON shape |
 |---|---|

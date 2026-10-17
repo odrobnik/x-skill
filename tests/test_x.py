@@ -122,10 +122,14 @@ class ConfigTests(XTestCase):
             os.environ.pop("X_SKILL_CONFIG_DIR")
             self.assertEqual(x._config_dir(), default)
             os.environ["OPENCLAW_STATE_DIR"] = str(state)
-            self.assertEqual(x._config_dir(), state / "x")  # nothing exists yet: follow the state folder
+            self.assertEqual(x._config_dir(), state / "x")  # nothing set up yet: follow the state folder
             default.mkdir(parents=True)
+            self.assertEqual(x._config_dir(), state / "x")  # an empty default folder doesn't count
+            write(default / "credentials.json", {"bearer_token": "OLD"})
             self.assertEqual(x._config_dir(), default)  # 1.0's folder stays in use...
             (state / "x").mkdir(parents=True)
+            self.assertEqual(x._config_dir(), default)  # ...also next to an empty new folder...
+            write(state / "x" / "config.json", {"bearer_token": "NEW"})
             self.assertEqual(x._config_dir(), state / "x")  # ...until the files move
 
     def test_legacy_files_still_work_and_config_json_wins(self):
@@ -225,6 +229,22 @@ class PostTests(XTestCase):
                                            "account": "me", "url": "https://x.com/me/status/42"})
         self.assertEqual(json.loads(fake.requests[0].data), {"text": "Hello X"})
         self.assertEqual(fake.requests[0].get_header("Authorization"), "Bearer A")
+
+    def test_preview_names_the_account_of_a_sign_in_that_never_stored_it(self):
+        sign_in(user=None)  # what 1.0 stored, or a sign-in whose account lookup failed
+        fake = FakeX({("GET", "/2/users/me"): {"data": {"id": "100", "username": "me", "name": "Me"}}})
+        code, out, err = run("--json", "post", "Hello X", fake=fake)
+        self.assertEqual(code, x.NEEDS_CONFIRMATION_EXIT)
+        self.assertEqual(json.loads(out)["account"], "me")
+        self.assertIn("Would post as @me", err)
+        self.assertEqual(json.loads(x.TOKEN_FILE.read_text())["user"]["username"], "me")
+
+    def test_yes_does_not_post_when_the_account_is_unknown(self):
+        sign_in(user=None)
+        fake = FakeX({("GET", "/2/users/me"): http_error(503, {"title": "Service Unavailable"})})
+        code, out, _ = run("--json", "post", "Hello X", "--yes", fake=fake)
+        self.assertEqual(code, 1)
+        self.assertEqual([r.get_method() for r in fake.requests], ["GET"])  # nothing was posted
 
     def test_needs_the_sign_in_even_for_the_preview(self):
         code, out, _ = run("--json", "post", "Hello X")

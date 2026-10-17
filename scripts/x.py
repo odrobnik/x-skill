@@ -56,6 +56,16 @@ def _exists(path: Path) -> bool:
         return False
 
 
+# 1.0 kept the bearer token and the OAuth client in two files of their own. They are still
+# read, so existing setups keep working; config.json and the env vars take precedence.
+LEGACY_NAMES = ("credentials", "oauth2")
+
+
+def _has_settings(folder: Path) -> bool:
+    """True when the folder holds config, a sign-in, or 1.0's settings, not when it is merely there."""
+    return any(_exists(folder / f"{name}.json") for name in ("config", "tokens", *LEGACY_NAMES))
+
+
 def _config_dir() -> Path:
     """Where config and the sign-in live; OpenClaw's backups and Docker setups keep its home folder."""
     custom = os.environ.get("X_SKILL_CONFIG_DIR")
@@ -66,7 +76,7 @@ def _config_dir() -> Path:
     if state:
         moved = Path(state).expanduser() / "x"
         # 1.0 always used the default folder: keep using it until its files move
-        if _exists(moved) or not _exists(default):
+        if _has_settings(moved) or not _has_settings(default):
             return moved
     return default
 
@@ -75,9 +85,7 @@ CONFIG_DIR = _config_dir()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 TOKEN_FILE = CONFIG_DIR / "tokens.json"
 PENDING_AUTH_FILE = CONFIG_DIR / "pending-auth.json"
-# 1.0 kept the bearer token and the OAuth client in two files of their own. They are still
-# read, so existing setups keep working; config.json and the env vars take precedence.
-LEGACY_CONFIG_FILES = tuple(CONFIG_DIR / f"{name}.json" for name in ("credentials", "oauth2"))
+LEGACY_CONFIG_FILES = tuple(CONFIG_DIR / f"{name}.json" for name in LEGACY_NAMES)
 
 API_HOST = "https://api.x.com"
 API_BASE = f"{API_HOST}/2"
@@ -627,9 +635,12 @@ def cmd_post(args):
     text = args.text
     if not text.strip():
         _fail("Nothing to post: the text is empty.", "usage", 2)
-    account = (load_tokens().get("user") or {}).get("username")  # also fails early when not signed in
-    who = f" as @{account}" if account else ""
-    print(f"{'Posting' if args.yes else 'Would post'}{who} ({len(text)} characters):")
+    # The account the post goes to, also for a 1.0 sign-in that never stored it; fails when not signed in
+    account = _signed_in_account().get("username")
+    if not account:
+        _fail("X didn't name the signed-in account, so nothing can be posted. Run: x.py auth",
+              "unknown_account")
+    print(f"{'Posting' if args.yes else 'Would post'} as @{account} ({len(text)} characters):")
     for line in text.splitlines() or [""]:
         print(f"  │ {line}")
     if not args.yes:
