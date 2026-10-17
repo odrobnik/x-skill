@@ -96,7 +96,7 @@ def mode(path):
 
 def sign_in(**extra):
     tokens = {"access_token": "A", "refresh_token": "R", "expires_in": 7200,
-              "obtained_at": int(time.time()), "user": {"id": "100", "username": "me", "name": "Me"}}
+              "issued_at": int(time.time()), "user": {"id": "100", "username": "me", "name": "Me"}}
     tokens.update(extra)
     write(x.TOKEN_FILE, tokens)
     return tokens
@@ -168,7 +168,7 @@ class SignInStorageTests(XTestCase):
 
     def test_expired_sign_in_is_renewed_before_the_request(self):
         write(x.CONFIG_FILE, {"client_id": "CID", "client_secret": "SECRET"})
-        sign_in(obtained_at=int(time.time()) - 8000)
+        sign_in(issued_at=int(time.time()) - 8000)
         fake = FakeX({
             ("POST", "/2/oauth2/token"): {"access_token": "B", "expires_in": 7200, "token_type": "bearer"},
             ("GET", "/2/users/100/bookmarks"): {"data": [{"id": "7", "text": "saved"}]},
@@ -181,6 +181,7 @@ class SignInStorageTests(XTestCase):
         self.assertEqual(fake.requests[1].get_header("Authorization"), "Bearer B")
         tokens = json.loads(x.TOKEN_FILE.read_text())
         self.assertEqual((tokens["access_token"], tokens["refresh_token"]), ("B", "R"))  # X sent no new one
+        self.assertGreater(tokens["issued_at"], time.time() - 60)  # 1.0's field, so 1.0 can share the sign-in
         self.assertEqual(tokens["user"]["username"], "me")
         self.assertEqual(mode(x.TOKEN_FILE), 0o600)
 

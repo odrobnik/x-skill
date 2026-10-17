@@ -315,10 +315,12 @@ def load_tokens() -> dict:
 
 def _expired(tokens: dict) -> bool:
     """True when the sign-in is past, or within a minute of, the lifetime X gave it (2 hours)."""
-    obtained = tokens.get("obtained_at") or tokens.get("issued_at")  # 1.0 wrote issued_at
-    if not obtained or not tokens.get("expires_in"):
+    # issued_at is 1.0's field too, so both versions can share the stored sign-in: 1.0 renews
+    # a sign-in without it on every request
+    issued = tokens.get("issued_at")
+    if not issued or not tokens.get("expires_in"):
         return False  # unknown: X answers 401 when it has run out, which renews it too
-    return time.time() >= float(obtained) + float(tokens["expires_in"]) - 60
+    return time.time() >= float(issued) + float(tokens["expires_in"]) - 60
 
 
 def _token_request(url: str, fields: dict, cfg: dict) -> dict:
@@ -348,7 +350,7 @@ def refresh_sign_in(tokens: dict) -> dict:
         raise
     if not new.get("access_token"):
         _fail("X returned no new sign-in. Run: x.py auth", "not_signed_in")
-    new["obtained_at"] = int(time.time())
+    new["issued_at"] = int(time.time())
     for key in ("refresh_token", "user"):  # keep what X doesn't send again
         if key in tokens and key not in new:
             new[key] = tokens[key]
@@ -777,7 +779,7 @@ def _exchange_code(code: str, cfg: dict, verifier: str):
         _fail(f"Signing in failed: {e}", e.code)
     if not tokens.get("access_token"):
         _fail("X returned no sign-in. Run: x.py auth", "not_signed_in")
-    tokens["obtained_at"] = int(time.time())
+    tokens["issued_at"] = int(time.time())
     save_tokens(tokens)
     PENDING_AUTH_FILE.unlink(missing_ok=True)
 
