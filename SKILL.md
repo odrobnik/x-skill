@@ -67,7 +67,7 @@ python3 {baseDir}/scripts/x.py tweet POST_URL_OR_ID
 python3 {baseDir}/scripts/x.py tweets POST_URL_OR_ID [more ...]    # up to 100 in one request
 
 # The signed-in account (needs auth)
-python3 {baseDir}/scripts/x.py home [--max 1-800] [--exclude retweets,replies]   # home timeline, newest first
+python3 {baseDir}/scripts/x.py home [--max 1-3200] [--exclude retweets,replies]   # home timeline, newest first
 python3 {baseDir}/scripts/x.py bookmarks [--max 1-100] [--contains "TEXT"] [--urls]
 python3 {baseDir}/scripts/x.py likes USERNAME [--max 1-100]
 python3 {baseDir}/scripts/x.py post "TEXT" [--yes]                 # without --yes: preview only, exit 3
@@ -93,7 +93,7 @@ Add `--json` before or after the subcommand (`x.py --json user NAME` = `x.py use
 |---|---|
 | `user` | the user from X (`id`, `name`, `username`, `description`, `created_at`, `verified`, `public_metrics`) plus `url` |
 | `timeline`, `search`, `likes`, `bookmarks` | `[post, ...]` in X's order |
-| `home` | `[post, ...]` newest first; each post also has `author_username` and `author_name`, and `note_tweet.text` for long posts |
+| `home` | `[post, ...]` newest first; each post also has `author_username`, `author_name` and `full_text` (the untruncated text: a long post's `note_tweet`, or for a repost `RT @user: ` plus the original's full text) |
 | `thread` | `[post, ...]`, oldest first |
 | `tweet` | one post |
 | `tweets` | `[post, ...]` in the order asked; a post that can't be found is `{id, found: false, error}` (exit 1) |
@@ -107,7 +107,7 @@ A post is the post from X (`id`, `text`, `created_at`, `public_metrics`, `author
 ```bash
 python3 {baseDir}/scripts/x.py --json search "from:XDevelopers -is:retweet" --max 10 | jq -r '.[] | .url'
 python3 {baseDir}/scripts/x.py bookmarks --urls --json | jq -r '.[]'
-python3 {baseDir}/scripts/x.py home --max 20 --json | jq -r '.[] | "@\(.author_username): \(.note_tweet.text // .text)"'
+python3 {baseDir}/scripts/x.py home --max 20 --json | jq -r '.[] | "@\(.author_username): \(.full_text)"'
 ```
 
 ## How to use it
@@ -116,7 +116,7 @@ python3 {baseDir}/scripts/x.py home --max 20 --json | jq -r '.[] | "@\(.author_u
 - **The home timeline, bookmarks and likes are private.** Show them to the user in the conversation. Don't post them, send them anywhere else, or save them to files unless the user asks for that.
 - `search` and `thread` only reach back 7 days (X's recent search). Older posts need X's full-archive search, which this skill doesn't use.
 - `thread` returns the author's own posts in the conversation (a self-thread), oldest first, not other people's replies.
-- `home --max` above 100 pages through in requests of up to 100 posts; X serves at most the latest 800.
+- `home --max` above 100 pages through in requests of up to 100 posts; X serves at most the latest 3,200 posts or 7 days.
 - Every request costs money on X's pay-per-use plan. Use the smallest `--max` that answers the question, and look up many posts with one `tweets` call rather than many `tweet` calls.
 - **Signing in needs the user.** In cloud, container or other headless sessions always use `auth --manual`: send the user the URL and ask for the address their browser shows afterwards. It starts with http://localhost:8080/callback, and that page not loading is expected. Then run `auth --code "<that address>"`. On the user's own computer, plain `auth` opens the browser and finishes by itself.
 - If a command reports that the sign-in expired or was revoked, run `auth` again.

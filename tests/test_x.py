@@ -460,10 +460,26 @@ class HomeTests(XTestCase):
         self.assertEqual(result[0]["url"], "https://x.com/someone/status/2")
         self.assertNotIn("author_username", result[1])
         q = fake.query()
-        self.assertEqual((q["max_results"], q["exclude"], q["expansions"]), ("5", "replies", "author_id"))
+        self.assertEqual((q["max_results"], q["exclude"], q["expansions"].split(",")[0]), ("5", "replies", "author_id"))
         self.assertIn("note_tweet", q["tweet.fields"])
         self.assertEqual(fake.requests[0].get_header("Authorization"), "Bearer A")
         self.assertIn("the whole long post", err)
+        self.assertEqual(result[0]["full_text"], "the whole long post")
+        self.assertIn("referenced_tweets.id", q["expansions"])
+
+    def test_home_reposts_get_the_original_full_text(self):
+        sign_in()
+        fake = FakeX({("GET", self.PATH): {
+            "data": [{"id": "3", "text": "RT @orig: truncated…", "author_id": "8",
+                      "referenced_tweets": [{"type": "retweeted", "id": "7"}]}],
+            "includes": {"tweets": [{"id": "7", "author_id": "9", "text": "short",
+                                     "note_tweet": {"text": "the original, in full"}}],
+                         "users": [{"id": "8", "username": "reposter", "name": "R"},
+                                   {"id": "9", "username": "orig", "name": "O"}]}}})
+        code, out, err = run("--json", "home", fake=fake)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)[0]["full_text"], "RT @orig: the original, in full")
+        self.assertIn("the original, in full", err)
 
     def test_home_pages_through_for_more_than_100(self):
         sign_in()
@@ -483,9 +499,12 @@ class HomeTests(XTestCase):
         self.assertEqual((code, json.loads(out)["error"]["code"]), (1, "not_signed_in"))
 
     def test_home_max_is_checked(self):
-        for value in ("0", "801"):
+        for value in ("0", "3201"):
             code, out, _ = run("--json", "home", "--max", value)
             self.assertEqual((code, json.loads(out)["error"]["code"]), (2, "usage"), value)
+        sign_in()
+        fake = FakeX({("GET", self.PATH): {"meta": {"result_count": 0}}})
+        self.assertEqual(run("--json", "home", "--max", "3200", fake=fake)[0], 0)
 
 
 if __name__ == "__main__":

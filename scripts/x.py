@@ -568,8 +568,19 @@ def cmd_likes(args):
     _print_tweets(tweets, empty="No liked posts found.")
 
 
-HOME_MAX = 800  # X serves at most the latest 800 posts of the home timeline
+HOME_MAX = 3200  # X serves at most the latest 3,200 posts (or 7 days) of the home timeline
 PAGE_MAX = 100  # posts per page of a list endpoint
+
+
+def _full_text(tweet: dict, included: dict, users: dict) -> str:
+    """A post's untruncated text: a long post's note_tweet, and for a repost the original's full text."""
+    for ref in tweet.get("referenced_tweets") or []:
+        original = included.get(ref.get("id")) if isinstance(ref, dict) and ref.get("type") == "retweeted" else None
+        if original:
+            name = (users.get(original.get("author_id")) or {}).get("username")
+            text = (original.get("note_tweet") or {}).get("text") or original.get("text", "")
+            return f"RT @{name}: {text}" if name else text
+    return (tweet.get("note_tweet") or {}).get("text") or tweet.get("text", "")
 
 
 def cmd_home(args):
@@ -577,17 +588,20 @@ def cmd_home(args):
     params = {
         "max_results": min(args.max, PAGE_MAX),
         "tweet.fields": "created_at,public_metrics,author_id,note_tweet,referenced_tweets,conversation_id",
-        "expansions": "author_id",
+        # referenced_tweets.id: X truncates a repost's own text; the original carries it in full
+        "expansions": "author_id,referenced_tweets.id,referenced_tweets.id.author_id",
         "user.fields": "username,name",
     }
     if args.exclude:
         params["exclude"] = args.exclude
-    tweets, users = [], {}
+    tweets, users, included = [], {}, {}
     while len(tweets) < args.max:
         reply = api_request("GET", f"/users/{account['id']}/timelines/reverse_chronological",
                             params, user=True)
         tweets += reply.get("data") or []
         users.update({u.get("id"): u for u in (reply.get("includes") or {}).get("users", [])})
+        included.update({t.get("id"): t for t in (reply.get("includes") or {}).get("tweets", [])
+                         if isinstance(t, dict)})
         token = (reply.get("meta") or {}).get("next_token")
         if not token or not reply.get("data"):
             break
@@ -601,6 +615,7 @@ def cmd_home(args):
         post = _tweet_json(tweet, author.get("username"))
         if author.get("name"):
             post["author_name"] = author["name"]
+        post["full_text"] = _full_text(tweet, included, users)
         results.append(post)
     emit(results)
     if tweets:
@@ -609,8 +624,7 @@ def cmd_home(args):
         author = users.get(tweet.get("author_id")) or {}
         if author:
             print(f"👤 {author.get('name', '')} (@{author.get('username', '')})")
-        long_text = (tweet.get("note_tweet") or {}).get("text")
-        format_tweet(dict(tweet, text=long_text) if long_text else tweet, author.get("username"))
+        format_tweet(dict(tweet, text=_full_text(tweet, included, users)), author.get("username"))
     if not tweets:
         print("No posts in the home timeline.")
 
