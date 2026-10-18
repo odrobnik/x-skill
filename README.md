@@ -1,6 +1,6 @@
 # x-skill
 
-🐦 Read and post on X (Twitter) through the official [X API v2](https://docs.x.com/x-api): profiles, an account's recent posts, threads, recent search, post lookup by URL or ID, your bookmarks and likes, and posting with a preview first. Python 3 standard library only.
+🐦 Read and post on X (Twitter) through the official [X API v2](https://docs.x.com/x-api): profiles, an account's recent posts, threads, recent search, post lookup by URL or ID, your home timeline, bookmarks and likes, and posting with a preview first. Python 3 standard library only.
 
 An agent skill for [OpenClaw](https://openclaw.ai) (published on ClawHub as `x-api-v2`), Claude Code, Codex and other agents that read `SKILL.md`.
 
@@ -28,6 +28,7 @@ python3 scripts/x.py thread https://x.com/XDevelopers/status/1234567890
 # Sign in once for bookmarks, likes and posting (needs an OAuth 2.0 client, see SETUP.md)
 python3 scripts/x.py auth
 python3 scripts/x.py bookmarks --max 50
+python3 scripts/x.py home --max 20 --exclude replies
 python3 scripts/x.py post "Hello from OpenClaw!"          # preview only; add --yes to post
 python3 scripts/x.py --json search "OpenClaw" | jq -r '.[].url'   # --json on any command: one JSON document on stdout
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""X (Twitter) API v2 client: profiles, posts, threads, search, bookmarks, likes and posting.
+"""X (Twitter) API v2 client: profiles, posts, threads, search, home timeline, bookmarks, likes and posting.
 
 Usage:
     python3 x.py user USERNAME                       # Profile: bio, counts, verification
@@ -8,6 +8,7 @@ Usage:
     python3 x.py search "query" [--max N]            # Posts from the last 7 days
     python3 x.py tweet TWEET_URL_OR_ID
     python3 x.py tweets TWEET_URL_OR_ID [...]        # Up to 100 in one request
+    python3 x.py home [--max N] [--exclude retweets,replies]      # Needs the sign-in
     python3 x.py bookmarks [--max N] [--contains TEXT] [--urls]   # Needs the sign-in
     python3 x.py likes USERNAME [--max N]            # Needs the sign-in
     python3 x.py post "text" [--yes]                 # Needs the sign-in; without --yes: preview only
@@ -567,6 +568,53 @@ def cmd_likes(args):
     _print_tweets(tweets, empty="No liked posts found.")
 
 
+HOME_MAX = 800  # X serves at most the latest 800 posts of the home timeline
+PAGE_MAX = 100  # posts per page of a list endpoint
+
+
+def cmd_home(args):
+    account = _signed_in_account()
+    params = {
+        "max_results": min(args.max, PAGE_MAX),
+        "tweet.fields": "created_at,public_metrics,author_id,note_tweet,referenced_tweets,conversation_id",
+        "expansions": "author_id",
+        "user.fields": "username,name",
+    }
+    if args.exclude:
+        params["exclude"] = args.exclude
+    tweets, users = [], {}
+    while len(tweets) < args.max:
+        reply = api_request("GET", f"/users/{account['id']}/timelines/reverse_chronological",
+                            params, user=True)
+        tweets += reply.get("data") or []
+        users.update({u.get("id"): u for u in (reply.get("includes") or {}).get("users", [])})
+        token = (reply.get("meta") or {}).get("next_token")
+        if not token or not reply.get("data"):
+            break
+        params = dict(params, pagination_token=token,
+                      max_results=max(1, min(args.max - len(tweets), PAGE_MAX)))
+    tweets = tweets[:args.max]
+
+    results = []
+    for tweet in tweets:
+        author = users.get(tweet.get("author_id")) or {}
+        post = _tweet_json(tweet, author.get("username"))
+        if author.get("name"):
+            post["author_name"] = author["name"]
+        results.append(post)
+    emit(results)
+    if tweets:
+        print(f"🏠 Home timeline of @{account.get('username')}\n")
+    for tweet in tweets:
+        author = users.get(tweet.get("author_id")) or {}
+        if author:
+            print(f"👤 {author.get('name', '')} (@{author.get('username', '')})")
+        long_text = (tweet.get("note_tweet") or {}).get("text")
+        format_tweet(dict(tweet, text=long_text) if long_text else tweet, author.get("username"))
+    if not tweets:
+        print("No posts in the home timeline.")
+
+
 def _bookmark_text(tweet: dict, included: dict) -> str:
     """Everything --contains looks at: the text, a long post's full text, and article titles and text."""
     parts = [tweet.get("text", ""), (tweet.get("note_tweet") or {}).get("text", "")]
@@ -870,6 +918,7 @@ examples:
   x.py thread https://x.com/XDevelopers/status/1234567890
   x.py auth                     (one-time sign-in for bookmarks, likes and posting)
   x.py bookmarks --max 50
+  x.py home --max 20 --exclude replies
   x.py post "Hello from OpenClaw!"   (preview; add --yes to post)
 """)
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -903,6 +952,12 @@ examples:
 
     p = add("tweets", help=f"several posts in one request (up to {MAX_BATCH})")
     p.add_argument("tweet_ids", nargs="+", metavar="ID", help="post URLs or IDs")
+
+    p = add("home", help="the signed-in account's home timeline, newest first (needs the sign-in)")
+    p.add_argument("--max", type=_int_between(1, HOME_MAX), default=25, metavar="N",
+                   help=f"number of posts, 1-{HOME_MAX} (default: 25; more than 100 pages through)")
+    p.add_argument("--exclude", type=_exclude_list, metavar="KINDS",
+                   help="leave out retweets, replies, or both (retweets,replies)")
 
     p = add("bookmarks", help="the signed-in account's bookmarks")
     p.add_argument("--max", type=_int_between(1, 100), default=25, metavar="N",
@@ -950,7 +1005,7 @@ examples:
 
     cmds = {
         "user": cmd_user, "timeline": cmd_timeline, "thread": cmd_thread, "search": cmd_search,
-        "tweet": cmd_tweet, "tweets": cmd_tweets, "bookmarks": cmd_bookmarks, "likes": cmd_likes,
+        "tweet": cmd_tweet, "tweets": cmd_tweets, "bookmarks": cmd_bookmarks, "home": cmd_home, "likes": cmd_likes,
         "post": cmd_post, "auth": cmd_auth, "logout": cmd_logout,
     }
     try:

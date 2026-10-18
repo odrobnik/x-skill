@@ -1,8 +1,8 @@
 ---
 name: x-api-v2
-description: "Read and post on X (Twitter) through the official X API v2. With an app bearer token: look up a profile, read an account's recent posts (optionally without retweets or replies), read a thread its author wrote in the last 7 days, search posts from the last 7 days with X's search operators, and look up posts by URL or ID (up to 100 at once). With a one-time OAuth 2.0 sign-in in the browser: list the signed-in account's bookmarks (filter them by text, or list only their links), list liked posts, and publish a post, which only shows a preview until it is run again with --yes. The bearer token and the OAuth client come from env vars or config.json; the sign-in is stored owner-only (by default in ~/.openclaw/x), renewed automatically, and revoked by logout. Every command can also print JSON (--json). X bills API use per request. Use when the user asks to look someone up on X, read recent posts or a thread, search X, see their bookmarks or likes, or post on X."
-summary: "X (Twitter) API v2: profiles, posts, threads, recent search, bookmarks, likes, and posting with a preview first."
-version: 1.1.0
+description: "Read and post on X (Twitter) through the official X API v2. With an app bearer token: look up a profile, read an account's recent posts (optionally without retweets or replies), read a thread its author wrote in the last 7 days, search posts from the last 7 days with X's search operators, and look up posts by URL or ID (up to 100 at once). With a one-time OAuth 2.0 sign-in in the browser: read the signed-in account's home timeline (newest first, optionally without retweets or replies), list its bookmarks (filter them by text, or list only their links), list liked posts, and publish a post, which only shows a preview until it is run again with --yes. The bearer token and the OAuth client come from env vars or config.json; the sign-in is stored owner-only (by default in ~/.openclaw/x), renewed automatically, and revoked by logout. Every command can also print JSON (--json). X bills API use per request. Use when the user asks to look someone up on X, read recent posts or a thread, search X, see their home timeline, bookmarks or likes, or post on X."
+summary: "X (Twitter) API v2: profiles, posts, threads, recent search, home timeline, bookmarks, likes, and posting with a preview first."
+version: 1.2.0
 homepage: https://github.com/odrobnik/x-skill
 compatibility: "Python 3.8+ (standard library only) and network access to the X API. Works in OpenClaw, Claude Code, Codex and other agents that read SKILL.md."
 permissions:
@@ -67,6 +67,7 @@ python3 {baseDir}/scripts/x.py tweet POST_URL_OR_ID
 python3 {baseDir}/scripts/x.py tweets POST_URL_OR_ID [more ...]    # up to 100 in one request
 
 # The signed-in account (needs auth)
+python3 {baseDir}/scripts/x.py home [--max 1-800] [--exclude retweets,replies]   # home timeline, newest first
 python3 {baseDir}/scripts/x.py bookmarks [--max 1-100] [--contains "TEXT"] [--urls]
 python3 {baseDir}/scripts/x.py likes USERNAME [--max 1-100]
 python3 {baseDir}/scripts/x.py post "TEXT" [--yes]                 # without --yes: preview only, exit 3
@@ -92,6 +93,7 @@ Add `--json` before or after the subcommand (`x.py --json user NAME` = `x.py use
 |---|---|
 | `user` | the user from X (`id`, `name`, `username`, `description`, `created_at`, `verified`, `public_metrics`) plus `url` |
 | `timeline`, `search`, `likes`, `bookmarks` | `[post, ...]` in X's order |
+| `home` | `[post, ...]` newest first; each post also has `author_username` and `author_name`, and `note_tweet.text` for long posts |
 | `thread` | `[post, ...]`, oldest first |
 | `tweet` | one post |
 | `tweets` | `[post, ...]` in the order asked; a post that can't be found is `{id, found: false, error}` (exit 1) |
@@ -105,14 +107,16 @@ A post is the post from X (`id`, `text`, `created_at`, `public_metrics`, `author
 ```bash
 python3 {baseDir}/scripts/x.py --json search "from:XDevelopers -is:retweet" --max 10 | jq -r '.[] | .url'
 python3 {baseDir}/scripts/x.py bookmarks --urls --json | jq -r '.[]'
+python3 {baseDir}/scripts/x.py home --max 20 --json | jq -r '.[] | "@\(.author_username): \(.note_tweet.text // .text)"'
 ```
 
 ## How to use it
 
 - **Posting needs a clear yes.** Run `post` without `--yes` first: it shows the text, its length and the account, posts nothing, and exits with status 3. Show that preview to the user, and only after a clear yes run the same command with `--yes`. Never post text the user hasn't seen, and never post on your own initiative.
-- **Bookmarks and likes are private.** Show them to the user in the conversation. Don't post them, send them anywhere else, or save them to files unless the user asks for that.
+- **The home timeline, bookmarks and likes are private.** Show them to the user in the conversation. Don't post them, send them anywhere else, or save them to files unless the user asks for that.
 - `search` and `thread` only reach back 7 days (X's recent search). Older posts need X's full-archive search, which this skill doesn't use.
 - `thread` returns the author's own posts in the conversation (a self-thread), oldest first, not other people's replies.
+- `home --max` above 100 pages through in requests of up to 100 posts; X serves at most the latest 800.
 - Every request costs money on X's pay-per-use plan. Use the smallest `--max` that answers the question, and look up many posts with one `tweets` call rather than many `tweet` calls.
 - **Signing in needs the user.** In cloud, container or other headless sessions always use `auth --manual`: send the user the URL and ask for the address their browser shows afterwards. It starts with http://localhost:8080/callback, and that page not loading is expected. Then run `auth --code "<that address>"`. On the user's own computer, plain `auth` opens the browser and finishes by itself.
 - If a command reports that the sign-in expired or was revoked, run `auth` again.
