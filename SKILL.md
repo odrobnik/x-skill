@@ -1,13 +1,13 @@
 ---
 name: x-api-v2
-description: "Read and post on X (Twitter) via the official X API v2. With an app bearer token: look up a profile, read an account's recent posts (optionally without retweets or replies), read a thread its author wrote in the last 7 days, search posts from the last 7 days with X's search operators, and look up posts by URL or ID (up to 100 at once). With a one-time OAuth 2.0 sign-in in the browser: read the signed-in account's home timeline (newest first), list its bookmarks (filtered by text, or just their links), list liked posts, and publish a post, which only shows a preview until run again with --yes. The bearer token and the OAuth client come from env vars or config.json; the sign-in is stored owner-only (by default in ~/.openclaw/x), renewed automatically, and revoked by logout. Every command can also print JSON (--json). X bills API use per request. Use when the user asks to look someone up on X, read recent posts or a thread, search X, see their home timeline, bookmarks or likes, or post on X."
-summary: "X (Twitter) API v2: profiles, posts, threads, recent search, home timeline, bookmarks, likes, and posting with a preview first."
-version: 1.2.0
+description: "Read and post on X (Twitter) via the official X API v2. With an app bearer token: look up a profile, read an account's recent posts, read a thread its author wrote in the last 7 days, search posts from the last 7 days with X's search operators, and look up posts by URL or ID (up to 100 at once). With a one-time OAuth 2.0 sign-in in the browser: read the signed-in account's home timeline (newest first), list its bookmarks (filtered by text, or just their links), list liked posts, and publish a post (optionally with images or as a reply), which only shows a preview until run again with --yes. The bearer token and the OAuth client come from env vars or config.json; the sign-in is stored owner-only (by default in ~/.openclaw/x), renewed automatically, and revoked by logout. Every command can also print JSON (--json). X bills API use per request. Use when the user asks to look someone up on X, read recent posts or a thread, search X, see their home timeline, bookmarks or likes, or post on X."
+summary: "X (Twitter) API v2: profiles, posts, threads, recent search, home timeline, bookmarks, likes, and posting (images or a reply) with a preview first."
+version: 1.3.0
 homepage: https://github.com/odrobnik/x-skill
 compatibility: "Python 3.8+ (standard library only) and network access to the X API. Works in OpenClaw, Claude Code, Codex and other agents that read SKILL.md."
 permissions:
   - "network: X only (https://api.x.com for the API and for signing in and out, https://x.com for the sign-in page in the browser), plus the local sign-in callback on http://localhost:8080"
-  - "file_read: config.json, tokens.json and pending-auth.json in the skill's config folder (~/.openclaw/x by default, or X_SKILL_CONFIG_DIR, or ${OPENCLAW_STATE_DIR}/x), and the two settings files that version 1.0 kept there"
+  - "file_read: config.json, tokens.json and pending-auth.json in the skill's config folder (~/.openclaw/x by default, or X_SKILL_CONFIG_DIR, or ${OPENCLAW_STATE_DIR}/x), the two settings files that version 1.0 kept there, and image files given with --media"
   - "file_write: tokens.json and pending-auth.json in that config folder (owner-only)"
   - "env: X_BEARER_TOKEN, X_CLIENT_ID, X_CLIENT_SECRET, X_SKILL_CONFIG_DIR, OPENCLAW_STATE_DIR"
 metadata:
@@ -37,7 +37,7 @@ metadata:
 
 # X (Twitter) API v2
 
-Look up profiles, posts and threads on X, search recent posts, read the signed-in account's bookmarks and likes, and publish posts, through the official X API v2.
+Look up profiles, posts and threads on X, search recent posts, read the signed-in account's bookmarks and likes, and publish posts (with images or as a reply), through the official X API v2.
 
 **Entry point:** `{baseDir}/scripts/x.py` (Python 3 standard library only)
 
@@ -45,9 +45,9 @@ Look up profiles, posts and threads on X, search recent posts, read the signed-i
 
 ## When to use
 
-- The user asks to look up an X (Twitter) account or post, read someone's recent posts or a thread, search X, see their own bookmarks or likes, or publish a post on X.
+- The user asks to look up an X (Twitter) account or post, read someone's recent posts or a thread, search X, see their own bookmarks or likes, or publish a post on X (including with an image or as a reply).
 - Not for other social networks, direct messages, or downloading media.
-- `user`, `timeline`, `thread`, `search`, `tweet`, `tweets`, `bookmarks` and `likes` only read. `post` publishes on the user's account: run it only for a post the user asked for, and only after they approved the exact text (see How to use it).
+- `user`, `timeline`, `thread`, `search`, `tweet`, `tweets`, `bookmarks` and `likes` only read. `post` publishes on the user's account: run it only for a post the user asked for, and only after they approved the exact text and any attachments (see How to use it).
 
 ## Setup
 
@@ -70,7 +70,8 @@ python3 {baseDir}/scripts/x.py tweets POST_URL_OR_ID [more ...]    # up to 100 i
 python3 {baseDir}/scripts/x.py home [--max 1-3200] [--exclude retweets,replies]   # home timeline, newest first
 python3 {baseDir}/scripts/x.py bookmarks [--max 1-100] [--contains "TEXT"] [--urls]
 python3 {baseDir}/scripts/x.py likes USERNAME [--max 1-100]
-python3 {baseDir}/scripts/x.py post "TEXT" [--yes]                 # without --yes: preview only, exit 3
+python3 {baseDir}/scripts/x.py post "TEXT" [--media PATH] [--reply-to POST_URL_OR_ID] [--yes]
+                                                                   # --media: up to 4 images (JPG, PNG, GIF, WEBP, <=5 MB); without --yes: preview only, exit 3
 
 # Sign in (one-time) and out
 python3 {baseDir}/scripts/x.py auth                                # opens the browser, waits for the callback on localhost:8080
@@ -87,7 +88,7 @@ Add `--json` before or after the subcommand (`x.py --json user NAME` = `x.py use
 
 - **stdout carries exactly one JSON document**, also for errors. Human-readable text, emoji and warnings go to stderr (discard with `2>/dev/null`).
 - Pretty-printed (indent 2) when stdout is a terminal, compact one-line JSON when piped. UTF-8, not ASCII-escaped. Posts and users are passed through as X sends them, plus a `url`.
-- **Errors:** `{"error": {"message": "...", "code": "..."}}` on stdout, non-zero exit (1 = failure, 2 = usage, including bad option values). `code` is X's error type (e.g. `usage-capped`, `resource-not-found`, `invalid_request`, `rate_limited`), or `not_signed_in`, `missing_credentials`, `missing_oauth_client`, `unknown_account`, `invalid_tweet`, `invalid_username`, `not_found`, `network_error`, `filesystem_error`, `usage`; `error` for anything else.
+- **Errors:** `{"error": {"message": "...", "code": "..."}}` on stdout, non-zero exit (1 = failure, 2 = usage, including bad option values). `code` is X's error type (e.g. `usage-capped`, `resource-not-found`, `invalid_request`, `rate_limited`, `client-forbidden`), or `not_signed_in`, `missing_credentials`, `missing_oauth_client`, `missing_scope`, `billing`, `unknown_account`, `invalid_tweet`, `invalid_username`, `not_found`, `network_error`, `filesystem_error`, `usage`; `error` for anything else.
 
 | Command | JSON shape |
 |---|---|
@@ -98,7 +99,7 @@ Add `--json` before or after the subcommand (`x.py --json user NAME` = `x.py use
 | `tweet` | one post |
 | `tweets` | `[post, ...]` in the order asked; a post that can't be found is `{id, found: false, error}` (exit 1) |
 | `bookmarks --urls` | the links in the bookmarks, as a list of strings |
-| `post` | `{ok, posted, id, text, account, url}`; without `--yes`: `{text, characters, account, ok: false, needs_confirmation: true, dry_run: true}`, exit 3 |
+| `post` | `{ok, posted, id, text, account, url}` plus `media_ids` and `reply_to` when used; without `--yes`: `{text, characters, account, ok: false, needs_confirmation: true, dry_run: true}` plus `media` (`path`, `bytes`, `type`) and `reply_to` when used, exit 3 |
 | `auth --manual` | `{ok, auth_url, redirect_uri, next}`; `auth` and `auth --code`: `{ok, token_file, account, scopes, has_refresh_token}` |
 | `logout` | `{ok, revoked, tokens_deleted, was_signed_in}` |
 
@@ -112,21 +113,21 @@ python3 {baseDir}/scripts/x.py home --max 20 --json | jq -r '.[] | "@\(.author_u
 
 ## How to use it
 
-- **Posting needs a clear yes.** Run `post` without `--yes` first: it shows the text, its length and the account, posts nothing, and exits with status 3. Show that preview to the user, and only after a clear yes run the same command with `--yes`. Never post text the user hasn't seen, and never post on your own initiative.
+- **Posting needs a clear yes.** Run `post` without `--yes` first: it shows the text, its length, the account, and any image files (with sizes) or reply target, posts nothing, uploads nothing, and exits with status 3. Show that preview to the user, and only after a clear yes run the same command with `--yes`. Never post text the user hasn't seen, and never post on your own initiative.
 - **The home timeline, bookmarks and likes are private.** Show them to the user in the conversation. Don't post them, send them anywhere else, or save them to files unless the user asks for that.
 - `search` and `thread` only reach back 7 days (X's recent search). Older posts need X's full-archive search, which this skill doesn't use.
 - `thread` returns the author's own posts in the conversation (a self-thread), oldest first, not other people's replies.
 - `home --max` above 100 pages through in requests of up to 100 posts; X serves at most the latest 3,200 posts or 7 days.
 - Every request costs money on X's pay-per-use plan. Use the smallest `--max` that answers the question, and look up many posts with one `tweets` call rather than many `tweet` calls.
 - **Signing in needs the user.** In cloud, container or other headless sessions always use `auth --manual`: send the user the URL and ask for the address their browser shows afterwards. It starts with http://localhost:8080/callback, and that page not loading is expected. Then run `auth --code "<that address>"`. On the user's own computer, plain `auth` opens the browser and finishes by itself.
-- If a command reports that the sign-in expired or was revoked, run `auth` again.
+- If a command reports that the sign-in expired or was revoked, or that it is missing the `media.write` permission (`missing_scope`), run `auth` again so the user can grant the new scope.
 
 ## Security and permissions
 
 - **Network:** only X. https://api.x.com for the API and for signing in and out; the sign-in page itself opens at https://x.com in the browser.
-- **Files:** reads config.json from the config folder (default ~/.openclaw/x); reads and keeps tokens.json there and, during sign-in, pending-auth.json, both owner-only (mode 600). Setups from version 1.0 keep working: the two settings files 1.0 kept in that folder are still read. Nothing else on disk.
+- **Files:** reads config.json from the config folder (default ~/.openclaw/x); reads and keeps tokens.json there and, during sign-in, pending-auth.json, both owner-only (mode 600). Setups from version 1.0 keep working: the two settings files 1.0 kept in that folder are still read. Image files named with `--media` are read for upload; nothing else on disk is touched.
 - **Local:** `auth` opens the browser and listens on 127.0.0.1 port 8080 for up to 5 minutes. Apart from that, the script starts no other programs and downloads no code.
-- **Sign-in:** asks X for tweet.read, users.read, like.read, bookmark.read, tweet.write and offline.access (to stay signed in). It is renewed automatically; `logout` revokes it at X and deletes tokens.json.
+- **Sign-in:** asks X for tweet.read, users.read, like.read, bookmark.read, tweet.write, media.write and offline.access (to stay signed in). It is renewed automatically; `logout` revokes it at X and deletes tokens.json. A sign-in from before 1.3.0 has no media.write: run `auth` again before uploading images.
 - **Declared scope:** the `permissions` list in the frontmatter states this same scope for reviewers and scanners. Hosts don't enforce it; it describes what the script does.
 
 ## Costs and rate limits
@@ -167,4 +168,5 @@ When a limit is hit, the error (code `rate_limited`) says when it resets.
 - Search and thread reach back 7 days only.
 - X has kept likes private since 2024, so expect `likes` to work for the signed-in account only.
 - Posts are limited to 280 characters for most accounts. X counts each link as 23 characters and some characters (emoji, CJK) as 2; the preview shows the plain length.
-- No media uploads, replies, reposts, quote posts, deleting posts, or direct messages.
+- Images on a post: up to 4, each JPG, PNG, GIF or WEBP and at most 5 MB. Video is not supported.
+- No reposts, quote posts, deleting posts, or direct messages.

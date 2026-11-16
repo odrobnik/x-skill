@@ -11,7 +11,8 @@ Usage:
     python3 x.py home [--max N] [--exclude retweets,replies]      # Needs the sign-in
     python3 x.py bookmarks [--max N] [--contains TEXT] [--urls]   # Needs the sign-in
     python3 x.py likes USERNAME [--max N]            # Needs the sign-in
-    python3 x.py post "text" [--yes]                 # Needs the sign-in; without --yes: preview only
+    python3 x.py post "text" [--media PATH ...] [--reply-to POST] [--yes]
+                                                     # Needs the sign-in; without --yes: preview only
     python3 x.py auth [--manual]                     # One-time sign-in (OAuth 2.0 with PKCE)
     python3 x.py auth --code CODE_OR_URL             # Finish a manual sign-in
     python3 x.py logout                              # Revoke the sign-in, delete the stored tokens
@@ -96,11 +97,19 @@ REVOKE_URL = f"{API_BASE}/oauth2/revoke"
 # Must match the callback URI registered for the app in the X Developer Console exactly
 REDIRECT_URI = "http://localhost:8080/callback"
 CALLBACK_PORT = 8080
-SCOPES = ("tweet.read", "users.read", "like.read", "bookmark.read", "tweet.write", "offline.access")
+SCOPES = ("tweet.read", "users.read", "like.read", "bookmark.read",
+          "tweet.write", "media.write", "offline.access")
 AUTH_TIMEOUT = 300  # seconds to wait for the browser to come back
 HTTP_TIMEOUT = 30
+UPLOAD_TIMEOUT = 120  # image uploads of up to 5 MB
 NEEDS_CONFIRMATION_EXIT = 3  # post without --yes only previews, then exits with this
 MAX_BATCH = 100  # tweets per lookup request
+MEDIA_MAX = 4
+MEDIA_MAX_BYTES = 5 * 1024 * 1024  # X's limit for tweet_image
+MEDIA_TYPES = {  # extension -> MIME type for the one-shot image upload
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
+}
 
 TWEET_ID_RE = re.compile(r"^\d{1,20}$")
 # x.com/NAME/status/ID, twitter.com (also mobile.) and the /i/status and /i/web/status forms
@@ -158,6 +167,19 @@ def _api_error(e: urllib.error.HTTPError) -> ApiError:
         reset = e.headers.get("x-rate-limit-reset") if e.headers else None
         if reset and reset.isdigit():
             message += f" (the limit resets at {datetime.fromtimestamp(int(reset)):%H:%M:%S})"
+    # 402, client-forbidden and billing/credit problem types: usually an expired card,
+    # empty credits, or a spending limit in the X Developer Console
+    lowered = f"{reason} {message}".lower()
+    # "credits" (not "credit") so a message about credentials is left alone
+    billing = (e.code == 402
+               or reason in {"client-forbidden", "payment-required"}
+               or "billing" in lowered or "credits" in lowered
+               or "credit card" in lowered)
+    if billing:
+        reason = reason or "billing"
+        message = ("X refused this because of a billing or credits issue "
+                   "(expired card, no credits, or a spending limit). "
+                   f"{message} Check billing in the X Developer Console.")
     return ApiError(e.code, message, reason)
 
 
@@ -352,7 +374,7 @@ def refresh_sign_in(tokens: dict) -> dict:
     if not new.get("access_token"):
         _fail("X returned no new sign-in. Run: x.py auth", "not_signed_in")
     new["issued_at"] = int(time.time())
-    for key in ("refresh_token", "user"):  # keep what X doesn't send again
+    for key in ("refresh_token", "user", "scope"):  # keep what X doesn't send again
         if key in tokens and key not in new:
             new[key] = tokens[key]
     tokens.clear()
@@ -363,10 +385,10 @@ def refresh_sign_in(tokens: dict) -> dict:
 
 # --- API helpers ---
 
-def _open_json(req: urllib.request.Request) -> dict:
+def _open_json(req: urllib.request.Request, timeout: int = HTTP_TIMEOUT) -> dict:
     """Send a request and decode the JSON reply; raises ApiError for HTTP errors."""
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
         raise _api_error(e) from None
@@ -379,10 +401,12 @@ def _open_json(req: urllib.request.Request) -> dict:
 
 
 def api_request(method: str, path: str, params: Optional[dict] = None, body=None,
-                user: bool = False) -> dict:
+                user: bool = False, raw: Optional[bytes] = None,
+                content_type: Optional[str] = None, timeout: int = HTTP_TIMEOUT) -> dict:
     """Call the X API v2 as the app (bearer token) or, with user=True, as the signed-in account.
 
-    Without a bearer token, app requests go out with the sign-in instead."""
+    Without a bearer token, app requests go out with the sign-in instead.
+    `body` is sent as JSON; `raw` (with `content_type`) is sent as-is, e.g. multipart."""
     url = API_BASE + path + ("?" + urllib.parse.urlencode(params) if params else "")
     bearer = "" if user else _load_config()["bearer_token"]
     tokens = None
@@ -396,14 +420,18 @@ def api_request(method: str, path: str, params: Optional[dict] = None, body=None
             refresh_sign_in(tokens)
     headers = {}
     data = None
-    if body is not None:
+    if raw is not None:
+        if content_type:
+            headers["Content-Type"] = content_type
+        data = raw
+    elif body is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode()
     for attempt in (1, 2):
         headers["Authorization"] = f"Bearer {tokens['access_token'] if tokens else bearer}"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            return _open_json(req)
+            return _open_json(req, timeout=timeout)
         except ApiError as e:
             if e.status != 401 or not tokens or attempt == 2:
                 raise
@@ -695,27 +723,155 @@ def _needs_confirmation(what: str, preview: dict):
     sys.exit(NEEDS_CONFIRMATION_EXIT)
 
 
+def _format_bytes(n: int) -> str:
+    if n >= 1024 * 1024:
+        value, unit = n / (1024 * 1024), "MB"
+    elif n >= 1024:
+        value, unit = n / 1024, "KB"
+    else:
+        return f"{n} bytes"
+    return f"{value:.1f}".rstrip("0").rstrip(".") + f" {unit}"
+
+
+def _safe_filename(name: str) -> str:
+    base = Path(name).name.replace('"', "").replace("\r", "").replace("\n", "")
+    try:
+        base.encode("ascii")
+    except UnicodeEncodeError:
+        base = f"image{Path(name).suffix.lower()}"
+    return base or "image"
+
+
+def _image_mime(path: Path, data: bytes) -> str:
+    """MIME type for a supported image, or exit if the extension or contents don't match."""
+    mime = MEDIA_TYPES.get(path.suffix.lower())
+    if not mime:
+        kinds = "JPG, PNG, GIF or WEBP"
+        _fail(f"{path} is not a supported image (use {kinds}).", "usage", 2)
+    ok = ((mime == "image/jpeg" and data.startswith(b"\xff\xd8\xff"))
+          or (mime == "image/png" and data.startswith(b"\x89PNG\r\n\x1a\n"))
+          or (mime == "image/gif" and data.startswith((b"GIF87a", b"GIF89a")))
+          or (mime == "image/webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP"))
+    if not ok:
+        kind = path.suffix.lower().lstrip(".").upper() or "supported"
+        _fail(f"{path} does not look like a {kind} image.", "usage", 2)
+    return mime
+
+
+def _prepare_media(paths: list) -> list:
+    """Validate image paths (at most 4, JPG/PNG/GIF/WEBP, 5 MB) and read them."""
+    if len(paths) > MEDIA_MAX:
+        _fail(f"At most {MEDIA_MAX} images can be attached ({len(paths)} given).", "usage", 2)
+    items = []
+    for raw in paths:
+        path = Path(raw).expanduser()
+        if not path.is_file():
+            _fail(f"Image not found: {raw}", "usage", 2)
+        size = path.stat().st_size
+        if size > MEDIA_MAX_BYTES:
+            _fail(f"{path} is {_format_bytes(size)}; images must be "
+                  f"{_format_bytes(MEDIA_MAX_BYTES)} or smaller.", "usage", 2)
+        if size == 0:
+            _fail(f"{path} is empty.", "usage", 2)
+        data = path.read_bytes()
+        items.append({"path": path, "name": _safe_filename(path.name),
+                      "mime": _image_mime(path, data), "size": size, "data": data})
+    return items
+
+
+def _require_scope(scope: str):
+    """Exit when the stored sign-in was granted without this OAuth scope."""
+    scopes = (load_tokens().get("scope") or "").split()
+    if scope not in scopes:
+        _fail(f"The stored sign-in is missing the {scope} permission, which image "
+              "uploads need. Run x.py auth again (on a headless machine: "
+              "x.py auth --manual, then x.py auth --code "
+              '"<redirect address>").', "missing_scope")
+
+
+def _multipart(fields: dict, files: list) -> tuple:
+    """A multipart/form-data body. files: (field, filename, content_type, data)."""
+    boundary = "----xskill" + secrets.token_hex(16)
+    sep = b"\r\n"
+    chunks = []
+    for name, value in fields.items():
+        chunks.append(b"--" + boundary.encode() + sep)
+        chunks.append(b'Content-Disposition: form-data; name="' + name.encode() + b'"' + sep + sep)
+        chunks.append(value.encode() + sep)
+    for name, filename, content_type, data in files:
+        chunks.append(b"--" + boundary.encode() + sep)
+        disposition = (
+            f'Content-Disposition: form-data; name="{name}"; filename="{filename}"'
+        ).encode()
+        chunks.append(disposition + sep)
+        chunks.append(b"Content-Type: " + content_type.encode() + sep + sep)
+        chunks.append(data + sep)
+    chunks.append(b"--" + boundary.encode() + b"--" + sep)
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def _upload_media(item: dict) -> str:
+    """One-shot v2 image upload; returns the media id to attach to a post."""
+    raw, content_type = _multipart(
+        {"media_category": "tweet_image"},
+        [("media", item["name"], item["mime"], item["data"])],
+    )
+    reply = api_request("POST", "/media/upload", user=True, raw=raw,
+                        content_type=content_type, timeout=UPLOAD_TIMEOUT)
+    media_id = (reply.get("data") or {}).get("id") or reply.get("id")
+    if not media_id:
+        _fail("X did not return a media id for the upload.", "media_upload_failed")
+    return str(media_id)
+
+
 def cmd_post(args):
     text = args.text
     if not text.strip():
         _fail("Nothing to post: the text is empty.", "usage", 2)
+    media = _prepare_media(args.media or [])
+    reply_to = extract_tweet_id(args.reply_to) if args.reply_to else None
+    if media:
+        _require_scope("media.write")
     # The account the post goes to, also for a 1.0 sign-in that never stored it; fails when not signed in
     account = _signed_in_account().get("username")
     if not account:
         _fail("X didn't name the signed-in account, so nothing can be posted. Run: x.py auth",
               "unknown_account")
-    print(f"{'Posting' if args.yes else 'Would post'} as @{account} ({len(text)} characters):")
+    action = "Posting" if args.yes else "Would post"
+    target = f" as a reply to {tweet_url(reply_to)}" if reply_to else ""
+    print(f"{action} as @{account}{target} ({len(text)} characters):")
     for line in text.splitlines() or [""]:
         print(f"  │ {line}")
+    if media:
+        print(f"  Attachments ({len(media)}):")
+        for item in media:
+            print(f"  │ {item['path']} ({_format_bytes(item['size'])}, {item['mime']})")
     if not args.yes:
-        _needs_confirmation("posted", {"text": text, "characters": len(text), "account": account})
+        preview = {"text": text, "characters": len(text), "account": account}
+        if media:
+            preview["media"] = [{"path": str(item["path"]), "bytes": item["size"],
+                                 "type": item["mime"]} for item in media]
+        if reply_to:
+            preview["reply_to"] = reply_to
+        _needs_confirmation("posted", preview)
 
-    posted = _data(api_request("POST", "/tweets", body={"text": text}, user=True),
+    media_ids = [_upload_media(item) for item in media]
+    body = {"text": text}
+    if media_ids:
+        body["media"] = {"media_ids": media_ids}
+    if reply_to:
+        body["reply"] = {"in_reply_to_tweet_id": reply_to}
+    posted = _data(api_request("POST", "/tweets", body=body, user=True),
                    "X did not confirm the post.")
     url = tweet_url(posted["id"], account)
     print(f"✅ Posted! {url}")
-    emit({"ok": True, "posted": True, "id": posted["id"], "text": posted.get("text", text),
-          "account": account, "url": url})
+    result = {"ok": True, "posted": True, "id": posted["id"], "text": posted.get("text", text),
+              "account": account, "url": url}
+    if media_ids:
+        result["media_ids"] = media_ids
+    if reply_to:
+        result["reply_to"] = reply_to
+    emit(result)
 
 
 # --- Commands: signing in and out ---
@@ -934,6 +1090,7 @@ examples:
   x.py bookmarks --max 50
   x.py home --max 20 --exclude replies
   x.py post "Hello from OpenClaw!"   (preview; add --yes to post)
+  x.py post "A photo" --media shot.png --reply-to 1234567890
 """)
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     subparsers = []
@@ -987,6 +1144,11 @@ examples:
 
     p = add("post", help="publish a post as the signed-in account (preview without --yes)")
     p.add_argument("text", help="the text of the post")
+    p.add_argument("--media", action="append", default=[], metavar="PATH",
+                   help="attach an image (JPG, PNG, GIF or WEBP, up to 5 MB; "
+                        f"repeatable, at most {MEDIA_MAX})")
+    p.add_argument("--reply-to", metavar="POST_URL_OR_ID",
+                   help="publish as a reply to this post")
     p.add_argument("--yes", action="store_true",
                    help="really post it (without it, only shows what would be posted)")
 

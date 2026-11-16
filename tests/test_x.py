@@ -168,7 +168,7 @@ class SignInStorageTests(XTestCase):
 
     def test_expired_sign_in_is_renewed_before_the_request(self):
         write(x.CONFIG_FILE, {"client_id": "CID", "client_secret": "SECRET"})
-        sign_in(issued_at=int(time.time()) - 8000)
+        sign_in(issued_at=int(time.time()) - 8000, scope="tweet.read media.write")
         fake = FakeX({
             ("POST", "/2/oauth2/token"): {"access_token": "B", "expires_in": 7200, "token_type": "bearer"},
             ("GET", "/2/users/100/bookmarks"): {"data": [{"id": "7", "text": "saved"}]},
@@ -183,6 +183,7 @@ class SignInStorageTests(XTestCase):
         self.assertEqual((tokens["access_token"], tokens["refresh_token"]), ("B", "R"))  # X sent no new one
         self.assertGreater(tokens["issued_at"], time.time() - 60)  # 1.0's field, so 1.0 can share the sign-in
         self.assertEqual(tokens["user"]["username"], "me")
+        self.assertEqual(tokens["scope"], "tweet.read media.write")  # X sent no new scope
         self.assertEqual(mode(x.TOKEN_FILE), 0o600)
 
     def test_a_401_renews_the_sign_in_once_and_retries(self):
@@ -505,6 +506,183 @@ class HomeTests(XTestCase):
         sign_in()
         fake = FakeX({("GET", self.PATH): {"meta": {"result_count": 0}}})
         self.assertEqual(run("--json", "home", "--max", "3200", fake=fake)[0], 0)
+
+
+
+# 1x1 transparent PNG, used as a valid --media file
+TINY_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+)
+
+
+def write_png(name="pic.png"):
+    path = x.CONFIG_DIR / name
+    path.write_bytes(TINY_PNG)
+    return path
+
+
+class MediaTests(XTestCase):
+    def test_preview_with_media_does_not_upload(self):
+        sign_in(scope="tweet.write media.write users.read")
+        path = write_png("shot.png")
+        fake = FakeX()
+        code, out, err = run("--json", "post", "Hello X", "--media", str(path), fake=fake)
+        self.assertEqual(code, x.NEEDS_CONFIRMATION_EXIT)
+        result = json.loads(out)
+        self.assertEqual(result["text"], "Hello X")
+        self.assertEqual(result["account"], "me")
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["media"], [{"path": str(path), "bytes": len(TINY_PNG),
+                                            "type": "image/png"}])
+        self.assertEqual(fake.requests, [])
+        self.assertIn("shot.png", err)
+        self.assertIn("Would post as @me", err)
+
+    def test_yes_uploads_then_posts_with_media_ids(self):
+        sign_in(scope="media.write tweet.write users.read")
+        path = write_png("shot.png")
+        fake = FakeX({
+            ("POST", "/2/media/upload"): {"data": {"id": "M1"}},
+            ("POST", "/2/tweets"): {"data": {"id": "42", "text": "Hello X"}},
+        })
+        code, out, _ = run("--json", "post", "Hello X", "--media", str(path), "--yes", fake=fake)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["media_ids"], ["M1"])
+        upload, tweet = fake.requests
+        self.assertIn("multipart/form-data", upload.get_header("Content-type"))
+        self.assertEqual(upload.get_header("Authorization"), "Bearer A")
+        self.assertIn(b"tweet_image", upload.data)
+        self.assertIn(b'filename="shot.png"', upload.data)
+        self.assertIn(TINY_PNG, upload.data)
+        self.assertEqual(json.loads(tweet.data), {"text": "Hello X", "media": {"media_ids": ["M1"]}})
+
+    def test_two_images_upload_in_order(self):
+        sign_in(scope="media.write tweet.write users.read")
+        a, b = write_png("a.png"), write_png("b.png")
+        ids = iter(["M1", "M2"])
+        fake = FakeX({
+            ("POST", "/2/media/upload"): lambda req: {"data": {"id": next(ids)}},
+            ("POST", "/2/tweets"): {"data": {"id": "42", "text": "two"}},
+        })
+        code, out, _ = run("--json", "post", "two", "--media", str(a), "--media", str(b),
+                           "--yes", fake=fake)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["media_ids"], ["M1", "M2"])
+        self.assertEqual(json.loads(fake.requests[-1].data)["media"]["media_ids"], ["M1", "M2"])
+
+    def test_missing_media_write_scope(self):
+        sign_in(scope="tweet.read users.read like.read bookmark.read tweet.write offline.access")
+        path = write_png()
+        fake = FakeX()
+        code, out, _ = run("--json", "post", "Hi", "--media", str(path), fake=fake)
+        self.assertEqual(code, 1)
+        error = json.loads(out)["error"]
+        self.assertEqual(error["code"], "missing_scope")
+        self.assertIn("media.write", error["message"])
+        self.assertIn("auth", error["message"])
+        self.assertEqual(fake.requests, [])
+
+    def test_missing_scope_when_token_has_no_scope_field(self):
+        sign_in()  # existing sign-ins from before 1.3.0 store no scope
+        path = write_png()
+        fake = FakeX()
+        code, out, _ = run("--json", "post", "Hi", "--media", str(path), "--yes", fake=fake)
+        self.assertEqual((code, json.loads(out)["error"]["code"]), (1, "missing_scope"))
+        self.assertEqual(fake.requests, [])
+
+    def test_more_than_four_images(self):
+        sign_in(scope="media.write")
+        paths = [str(write_png(f"{i}.png")) for i in range(5)]
+        fake = FakeX()
+        code, out, _ = run("--json", "post", "Hi", *sum((["--media", p] for p in paths), []),
+                           fake=fake)
+        self.assertEqual((code, json.loads(out)["error"]["code"]), (2, "usage"))
+        self.assertEqual(fake.requests, [])
+
+    def test_unsupported_type_and_missing_file(self):
+        sign_in(scope="media.write")
+        bad = x.CONFIG_DIR / "notes.txt"
+        bad.write_text("hello")
+        fake = FakeX()
+        code, out, _ = run("--json", "post", "Hi", "--media", str(bad), fake=fake)
+        self.assertEqual((code, json.loads(out)["error"]["code"]), (2, "usage"))
+        code, out, _ = run("--json", "post", "Hi", "--media", str(x.CONFIG_DIR / "gone.png"),
+                           fake=fake)
+        self.assertEqual((code, json.loads(out)["error"]["code"]), (2, "usage"))
+        self.assertEqual(fake.requests, [])
+
+    def test_contents_must_match_extension(self):
+        sign_in(scope="media.write")
+        path = x.CONFIG_DIR / "fake.png"
+        path.write_bytes(b"not a png")
+        fake = FakeX()
+        code, out, _ = run("--json", "post", "Hi", "--media", str(path), fake=fake)
+        self.assertEqual(code, 2)
+        self.assertIn("does not look like", json.loads(out)["error"]["message"])
+        self.assertEqual(fake.requests, [])
+
+    def test_image_too_large(self):
+        sign_in(scope="media.write")
+        path = x.CONFIG_DIR / "big.png"
+        path.write_bytes(TINY_PNG + b"\x00" * (x.MEDIA_MAX_BYTES))
+        fake = FakeX()
+        code, out, _ = run("--json", "post", "Hi", "--media", str(path), fake=fake)
+        self.assertEqual(code, 2)
+        self.assertIn("or smaller", json.loads(out)["error"]["message"])
+        self.assertEqual(fake.requests, [])
+
+    def test_reply_to_preview_and_post(self):
+        sign_in()
+        fake = FakeX()
+        code, out, err = run("--json", "post", "A reply", "--reply-to",
+                             "https://x.com/me/status/99", fake=fake)
+        self.assertEqual(code, x.NEEDS_CONFIRMATION_EXIT)
+        self.assertEqual(json.loads(out)["reply_to"], "99")
+        self.assertIn("reply to https://x.com/i/status/99", err)
+        self.assertEqual(fake.requests, [])
+        fake = FakeX({("POST", "/2/tweets"): {"data": {"id": "42", "text": "A reply"}}})
+        code, out, _ = run("--json", "post", "A reply", "--reply-to", "99", "--yes", fake=fake)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(fake.requests[0].data),
+                         {"text": "A reply", "reply": {"in_reply_to_tweet_id": "99"}})
+        self.assertEqual(json.loads(out)["reply_to"], "99")
+
+    def test_client_forbidden_on_upload_is_a_billing_message(self):
+        sign_in(scope="media.write tweet.write")
+        path = write_png()
+        fake = FakeX({("POST", "/2/media/upload"): http_error(
+            403, {"title": "Forbidden", "detail": "Client Forbidden",
+                  "type": "https://api.x.com/2/problems/client-forbidden"})})
+        code, out, _ = run("--json", "post", "Hi", "--media", str(path), "--yes", fake=fake)
+        self.assertEqual(code, 1)
+        error = json.loads(out)["error"]
+        self.assertEqual(error["code"], "client-forbidden")
+        self.assertRegex(error["message"], r"(?i)billing|credits")
+        self.assertIn("Developer Console", error["message"])
+        paths = [urllib.parse.urlparse(r.full_url).path for r in fake.requests]
+        self.assertEqual(paths, ["/2/media/upload"])
+
+    def test_credentials_in_a_401_is_not_billing(self):
+        sign_in()
+        fake = FakeX({("POST", "/2/tweets"): http_error(
+            401, {"title": "Unauthorized", "detail": "Invalid credentials"})})
+        code, out, _ = run("--json", "post", "Hi", "--yes", fake=fake)
+        self.assertEqual(code, 1)
+        error = json.loads(out)["error"]
+        self.assertNotEqual(error["code"], "billing")
+        self.assertNotRegex(error["message"], r"spending limit")
+
+    def test_402_is_mapped_to_billing(self):
+        sign_in()
+        fake = FakeX({("POST", "/2/tweets"): http_error(
+            402, {"title": "Payment Required", "detail": "No credits remaining"})})
+        code, out, _ = run("--json", "post", "Hi", "--yes", fake=fake)
+        self.assertEqual(code, 1)
+        error = json.loads(out)["error"]
+        self.assertEqual(error["code"], "billing")
+        self.assertRegex(error["message"], r"(?i)billing|credits")
+        self.assertIn("Developer Console", error["message"])
 
 
 if __name__ == "__main__":

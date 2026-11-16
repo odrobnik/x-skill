@@ -78,6 +78,7 @@ Env vars override the values in `config.json`.
 - **The sign-in is now stored owner-only** (mode 600). The script converts the stored sign-in the first time it reads it.
 - **`likes` needs one more permission** (like.read), which 1.0 didn't ask for. Run `python3 scripts/x.py auth` once more to grant it.
 - **`post` previews first** and posts only when run again with `--yes`.
+- **Image uploads (1.3.0) need `media.write`.** Sign-ins from earlier versions don't have it. Run `python3 scripts/x.py auth` once more (on a headless machine, `auth --manual` then `auth --code`) before using `--media`.
 
 ## 1. Bearer Token (Profiles, Posts, Search)
 
@@ -113,7 +114,7 @@ python3 scripts/x.py auth
 
 This opens the X consent page in the browser; a short-lived server on port 8080 catches the redirect to `http://localhost:8080/callback`. The sign-in is saved to `tokens.json` in the config folder and renewed automatically: X ends each sign-in after 2 hours, and the stored refresh token renews it.
 
-The script asks X for these permissions: tweet.read, users.read, like.read, bookmark.read, tweet.write and offline.access (to stay signed in).
+The script asks X for these permissions: tweet.read, users.read, like.read, bookmark.read, tweet.write, media.write and offline.access (to stay signed in).
 
 ### Headless Machines and Cloud Agents
 
@@ -152,7 +153,8 @@ A post or user fetched again within the same UTC day is charged once, and failed
 ## Troubleshooting
 
 - **401 Unauthorized** when reading: check the bearer token; copy it again from **Keys and tokens**.
-- **403 Forbidden**: the app's permissions don't cover the request, e.g. posting needs "Read and write" in the user authentication settings. Change them, then run `auth` again.
+- **403 Forbidden**: the app's permissions don't cover the request, e.g. posting needs "Read and write" in the user authentication settings. Change them, then run `auth` again. Image uploads that fail with `client-forbidden` or a billing message usually mean an expired card, no API credits, or a spending limit: check billing in the Developer Console.
+- **`missing_scope` when attaching an image**: the stored sign-in was granted before media.write was added. Run `auth` again.
 - **429 Too Many Requests**: a rate limit (per 15 minutes); the error says when it resets.
 - **Callback mismatch or invalid redirect URI** when signing in: the app's callback URI must be exactly `http://localhost:8080/callback`.
 - **The sign-in expired or was revoked**: run `python3 scripts/x.py auth` again.
